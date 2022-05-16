@@ -5,8 +5,8 @@ import requests
 from datetime import datetime 
 
 # GPIO pins
-plantas = 1 
-arboles = 2
+plantas = 17
+arboles = 27
 
 ON = 'on'
 OFF = 'off'
@@ -15,7 +15,7 @@ schedule = [
     [plantas, "09:00" , ON], 
     [plantas, "09:29" , OFF], 
 
-    [arboles, "09:00", ON],
+    [arboles, "09:30", ON],
     [arboles, "09:59", OFF],
 
     [plantas, "18:00", ON], 
@@ -30,6 +30,10 @@ GPIO.setwarnings(False)
 GPIO.setup(plantas, GPIO.OUT)
 GPIO.setup(arboles, GPIO.OUT)
 
+# Initialize 
+GPIO.output(plantas, GPIO.HIGH) 
+GPIO.output(arboles, GPIO.HIGH) 
+
 def log(msg):
     timelog = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") 
     print(f"[{timelog}] {msg}")
@@ -40,7 +44,7 @@ def is_raining_today():
 
     response = requests.get(url).json()
     precip_intensity = response['daily']['data'][0]['precipIntensity']
-    log(f"is_raining_today > precip_intensity: {precip_intensity}")
+    log(f"precip_intensity: {precip_intensity}")
     return precip_intensity > 0.5
 
 def get_time(): 
@@ -52,19 +56,20 @@ def wait_until_next_second():
     time.sleep(sleeptime)
 
 def activate(device, status):
-    log (f"{get_time()} Schedule event {device}: {status}")
+    log (f"Schedule event {device}: {status}")
 
     # if status is ON, check the weather,
     # and do not active if it is raining today 
     if status == ON and is_raining_today(): 
-        log (f"{get_time()} It is raining today, not activating {device}")
+        log (f"It is raining today, not activating {device}")
         return
 
-    GPIO.output(device, GPIO.HIGH if status == ON else GPIO.LOW) 
+    # If 0V is present at the relay pin, the corresponding LED lights up, at a HIGH level the LED goes out.
+    GPIO.output(device, GPIO.LOW if status == ON else GPIO.HIGH) 
 
 while True:
  
-    log(get_time()) 
+    #log(get_time()) 
     for event in schedule: 
         device = event[0]
         when = event[1]
