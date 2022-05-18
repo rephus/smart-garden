@@ -6,13 +6,32 @@ from datetime import datetime
 import traceback
 
 # GPIO pins
-plantas = 17
-arboles = 27
+PLANTAS = "plantas"
+ARBOLES = "arboles"
+
+
+RELAY_PLANTAS = 17 
+RELAY_ARBOLES = 27
 
 # Humidity sensor
-SENSOR_PIN = 23
-MIN_SENSOR_VALUE = 15000
+SENSOR_PLANTAS = 23
+SENSOR_ARBOLES = 24 
+MIN_SENSOR_VALUE = 10000
 MAX_SENSOR_VALUE = 100000
+
+
+device_dict = {
+    ARBOLES: {
+        "relay_pin": RELAY_ARBOLES, 
+        "sensor_pin": SENSOR_ARBOLES,
+        "hassio_entity": "sensor.arboles_humidity"
+    },
+    PLANTAS: {
+        "relay_pin": RELAY_PLANTAS, 
+        "sensor_pin": SENSOR_PLANTAS,
+        "hassio_entity": "sensor.plantas_humidity"
+    },
+}
 
 HUMIDITY_THRESHOLD = 20 #percent
 
@@ -20,38 +39,59 @@ ON = 'on'
 OFF = 'off'
 DRY = "dry"
 schedule = [
-    [plantas, "09:00" , ON], 
-    [plantas, "09:29" , OFF], 
+    [PLANTAS, "09:00" , ON], 
+    [PLANTAS, "09:29" , OFF], 
 
-    [arboles, "09:30", ON],
-    [arboles, "09:59", OFF],
+    [ARBOLES, "09:30", ON],
+    [ARBOLES, "09:59", OFF],
 
-    ["all", "12:00", DRY],
+    ["all", "16:23", DRY],
     ["all", "14:00", DRY],
 
-    [plantas, "18:00", ON], 
-    [plantas, "18:29", OFF], 
+    [PLANTAS, "18:00", ON], 
+    [PLANTAS, "18:29", OFF], 
 
-    [arboles, "18:30", ON],
-    [arboles, "18:59", OFF],
+    [ARBOLES, "18:30", ON],
+    [ARBOLES, "18:59", OFF],
 
-    ["all", "16:53", DRY],
+    ["all", "17:13", DRY],
     ["all", "22:00", DRY],
 
 ]
 
+def log(msg):
+    timelog = datetime.now().strftime("%Y-%m-%d %H:%M:%S") 
+    print(f"[{timelog}] {msg}")
+
+log("Initializing garden scheduler")
+
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
-GPIO.setup(plantas, GPIO.OUT)
-GPIO.setup(arboles, GPIO.OUT)
+GPIO.setup(RELAY_PLANTAS, GPIO.OUT)
+GPIO.setup(RELAY_ARBOLES, GPIO.OUT)
 
 # Initialize 
-GPIO.output(plantas, GPIO.HIGH) 
-GPIO.output(arboles, GPIO.HIGH) 
+GPIO.output(RELAY_PLANTAS, GPIO.LOW) #Blink relay to see if scripts runs successfully
+GPIO.output(RELAY_ARBOLES, GPIO.LOW) 
+time.sleep(1)
+GPIO.output(RELAY_PLANTAS, GPIO.HIGH) 
+GPIO.output(RELAY_ARBOLES, GPIO.HIGH) 
 
-def log(msg):
-    timelog = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") 
-    print(f"[{timelog}] {msg}")
+def update_hassio_entity(entity, status): 
+
+    log(f"Updating hassio entity {entity} with {status}")
+
+    r = requests.post(f"http://{config.HASSIO_URL}/api/states/{entity}", 
+    headers={
+        'Authorization': f"Bearer {config.HASSIO_TOKEN}",
+        'Content-Type':'application/json'
+    }, 
+    json={"state": status, "attributes":   {
+        "unit_of_measurement": "%",
+        "device_class": "humidity"
+    } 
+})
+    print(f"Response {r.text}")
 
 def notify_slack(text):   
     log("Notifiying on Slack")
@@ -112,38 +152,64 @@ def activate(device, status):
     # If 0V is present at the relay pin, the corresponding LED lights up, at a HIGH level the LED goes out.
     GPIO.output(device, GPIO.LOW if status == ON else GPIO.HIGH) 
 
-log("Starting garden scheduler")
+log("Starting garden scheduler loop")
 while True:
  
+    # update humidity every hour 
+    if datetime.now().minute == 0: 
+        humidity_sensor = read_stable_value(sensor)
+        update_hassio_entity("sensor.plantas_humidity", 30)
+
     try: 
         #log(get_time()) 
         for event in schedule: 
             device = event[0]
             when = event[1]
-            status = event[2]
+
 
             if when == get_time(): 
+                status = event[2]
+
                 log (f"Schedule event {device}: {status}")
 
                 if status == DRY:
-                    humidity_sensor = read_stable_value(SENSOR_PIN)
-                    log(f"Humidity on sensor {SENSOR_PIN}: {humidity_sensor}")
-                    if humidity_sensor < HUMIDITY_THRESHOLD: 
-                        for device in [plantas, arboles]: 
+                    for device in [PLANTAS, ARBOLES]: 
+                        relay = device_dict[device]['relay_pin']
+                        sensor = device_dict[device]['sensor_pin']
+                        hassio_entity = device_dict[device]['hassio_entity']
+
+                        humidity_sensor = read_stable_value(sensor)
+                        log(f"Humidity on sensor {device}: {humidity_sensor}")
+                        if humidity_sensor < HUMIDITY_THRESHOLD: 
+                        
                             notify_slack(f"Detected low humidity ({humidity_sensor}%), watering {device}...")
                             log(f"Detected low humidity, watering {device}...")
-                            activate(device, "ON")
+                            update_hassio_entity(hassio_entity, humidity_sensor)
+
+                            activate(relay, ON)
                             time.sleep(60*5) # 5 minutes 
-                            activate(device, "OFF")  
+                            activate(relay, OFF)  
                             log(f"Finished watering {device}")
 
+                            humidity_sensor = read_stable_value(sensor)
+                            update_hassio_entity(hassio_entity, humidity_sensor)
+                            log(f"Humidity after watering on sensor {sensor}: {humidity_sensor}")
+
                 else:
+                    relay = device_dict[device]['relay_pin']
+                    sensor = device_dict[device]['sensor_pin']
+                    hassio_entity = device_dict[device]['hassio_entity']
+
                     # if status is ON, check the weather,
                     # and do not active if it is raining today 
                     if status == ON and is_raining_today(): 
                         log (f"It is raining today, not activating {device}")
                     else:
-                        activate(device, status)
+                        humidity_sensor = read_stable_value(sensor)
+                        update_hassio_entity(hassio_entity, humidity_sensor)
+                        log(f"Humidity on scheduled watering {device} : {humidity_sensor}")
+                            
+                        activate(relay, status)
 
         wait_until_next_second()
     except Exception as e:  

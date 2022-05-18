@@ -3,8 +3,8 @@
 import RPi.GPIO as GPIO
 import time
 
-SENSOR_PIN = 23
-MIN_SENSOR_VALUE = 15000
+SENSOR_PIN = 24 # 24
+MIN_SENSOR_VALUE = 10000
 MAX_SENSOR_VALUE = 100000
 
 # instantiate GPIO as an object
@@ -15,7 +15,7 @@ def rc_time (pin_to_circuit):
     count = 0                                       #Output on the pin for 
     GPIO.setup(pin_to_circuit, GPIO.OUT)
     GPIO.output(pin_to_circuit, GPIO.LOW)
-    time.sleep(0.01)                                 #Change the pin back to input
+    time.sleep(0.1)                                 #Change the pin back to input
     GPIO.setup(pin_to_circuit, GPIO.IN)             #Count until the pin goes high
     while (GPIO.input(pin_to_circuit) == GPIO.LOW) and count < MAX_SENSOR_VALUE:
         count += 1
@@ -45,16 +45,11 @@ def read_stable_value(pin, times):
 
 try:                                                 # Main loop
     while True:
-        read_raw = False 
-        if read_raw: 
-            sensor_value = rc_time(SENSOR_PIN)
-            print ( f"Raw reading: {sensor_value}")
+        sensor_value = rc_time(SENSOR_PIN)
+        print ( f"Raw reading: {sensor_value}")
 
-            percent = calculate_percent(sensor_value)
-            print ( f"Percent reading: {percent}%")
-        else: 
-            percent = read_stable_value(SENSOR_PIN, 5)
-            print ( f"Percent reading: {percent}%")
+        percent = read_stable_value(SENSOR_PIN, 5)
+        print ( f"Percent reading: {percent}%")
 
 
 except KeyboardInterrupt:

@@ -1,3 +1,4 @@
 #!/bin/bash
 
-python3 -u app.py | tee "run.log"
+# Runing from `/etc/rc.local`
+python3 -u app.py | tee -a "run.log"

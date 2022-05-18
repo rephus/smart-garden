@@ -1,2 +1,4 @@
 weather_key = ""
 SLACK_URL=""
+HASSIO_URL=""
+HASSIO_TOKEN=""
