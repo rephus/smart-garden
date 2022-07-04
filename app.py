@@ -45,7 +45,7 @@ schedule = [
     [ARBOLES, "09:30", ON],
     [ARBOLES, "09:59", OFF],
 
-    ["all", "16:23", DRY],
+    ["all", "11:05", DRY], #water each devide for 5 minutes if sensor is below threshold
     ["all", "14:00", DRY],
 
     [PLANTAS, "18:00", ON], 
@@ -66,7 +66,7 @@ def log(msg):
 log("Initializing garden scheduler")
 
 GPIO.setmode(GPIO.BCM)
-GPIO.setwarnings(False)
+#GPIO.setwarnings(False)
 GPIO.setup(RELAY_PLANTAS, GPIO.OUT)
 GPIO.setup(RELAY_ARBOLES, GPIO.OUT)
 
@@ -78,34 +78,55 @@ GPIO.output(RELAY_PLANTAS, GPIO.HIGH)
 GPIO.output(RELAY_ARBOLES, GPIO.HIGH) 
 
 def update_hassio_entity(entity, status): 
+    try: 
+        log(f"Updating hassio entity {entity} with {status}")
 
-    log(f"Updating hassio entity {entity} with {status}")
+        r = requests.post(f"http://{config.HASSIO_URL}/api/states/{entity}", 
+            timeout=10,
+                headers={
+                'Authorization': f"Bearer {config.HASSIO_TOKEN}",
+                'Content-Type':'application/json'
+            }, 
+            json={"state": status, 
+                "attributes":   {
+                "unit_of_measurement": "%",
+                "device_class": "humidity"
+            } 
+        })
+        log(f"Hassio response: {r.text}")
+    except Exception as e: 
+        log(f"Unable to update hassio entity: {e}")
 
-    r = requests.post(f"http://{config.HASSIO_URL}/api/states/{entity}", 
-    headers={
-        'Authorization': f"Bearer {config.HASSIO_TOKEN}",
-        'Content-Type':'application/json'
-    }, 
-    json={"state": status, "attributes":   {
-        "unit_of_measurement": "%",
-        "device_class": "humidity"
-    } 
-})
-    print(f"Response {r.text}")
 
 def notify_slack(text):   
-    log("Notifiying on Slack")
-    #r = requests.post(config.SLACK_URL, json={'text': text})
+    try: 
 
+        log("Notifiying on Slack")
+        r = requests.post(config.SLACK_URL, json={'text': text, "icon_emoji": "sweat_drops", "username": "Smart garden"},timeout=10)
+        log(f"Slack response: {r.text}")
+    except Exception as e: 
+        log(f"Unable to send message to slack: {e}")
 
 def is_raining_today(): 
+    try: 
+        url = f"https://api.darksky.net/forecast/{config.weather_key}/36.65794,-4.5422482?units=si&exclude=hourly"
 
-    url = f"https://api.darksky.net/forecast/{config.weather_key}/36.65794,-4.5422482?units=si&exclude=hourly"
+        response = requests.get(url,timeout=10)
+        if response.status_code < 300:
 
-    response = requests.get(url).json()
-    precip_intensity = response['daily']['data'][0]['precipIntensity']
-    log(f"precip_intensity: {precip_intensity}")
-    return precip_intensity > 0.5
+            response_json = response.json()
+
+            precip_intensity = response_json['daily']['data'][0]['precipIntensity']
+            log(f"precip_intensity: {precip_intensity}")
+            return precip_intensity > 0.5
+        else: 
+            msg = f"Error fetching darksky weather {response.text}"
+            log(msg)
+            notify_slack(msg)
+            return False 
+    except Exception as e: 
+        log(f"Unable to get darsky weather : {e}")
+        return False 
 
 
 def rc_time (pin_to_circuit):
@@ -152,15 +173,32 @@ def activate(device, status):
     # If 0V is present at the relay pin, the corresponding LED lights up, at a HIGH level the LED goes out.
     GPIO.output(device, GPIO.LOW if status == ON else GPIO.HIGH) 
 
+# On restart, network is unreachable, so no point doing this at the beggining
+if False: 
+    for device in [PLANTAS, ARBOLES]: 
+        try: 
+            sensor = device_dict[device]['sensor_pin']
+            hassio_entity = device_dict[device]['hassio_entity']
+            humidity_sensor = read_stable_value(sensor)
+            log(f"Humidity on sensor {device}: {humidity_sensor}")
+            update_hassio_entity(hassio_entity, humidity_sensor)
+        except Exception as e: 
+            log(f"Error when updating humidity sensor on start: {e}")
+
 log("Starting garden scheduler loop")
 while True:
- 
-    # update humidity every hour 
-    if datetime.now().minute == 0: 
-        humidity_sensor = read_stable_value(sensor)
-        update_hassio_entity("sensor.plantas_humidity", 30)
-
     try: 
+        # update humidity every hour 
+        if datetime.now().minute == 0: 
+            log("Periodic humidity check on sensors")
+            for device in [PLANTAS, ARBOLES]: 
+                sensor = device_dict[device]['sensor_pin']
+                hassio_entity = device_dict[device]['hassio_entity']
+                humidity_sensor = read_stable_value(sensor)
+                log(f"Humidity on sensor {device}: {humidity_sensor}")
+                update_hassio_entity(hassio_entity, humidity_sensor)
+
+    
         #log(get_time()) 
         for event in schedule: 
             device = event[0]
@@ -192,8 +230,8 @@ while True:
                             log(f"Finished watering {device}")
 
                             humidity_sensor = read_stable_value(sensor)
-                            update_hassio_entity(hassio_entity, humidity_sensor)
                             log(f"Humidity after watering on sensor {sensor}: {humidity_sensor}")
+                            update_hassio_entity(hassio_entity, humidity_sensor)
 
                 else:
                     relay = device_dict[device]['relay_pin']
