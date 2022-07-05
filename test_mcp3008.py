@@ -8,3 +8,8 @@ print("Read channel 0: %.2f" % (value / 1023.0 * 3.3) )
 value = adc.read( channel = 1 ) # puedes ajustar el canal en el que lees
 
 print("Read channel 1: %.2f" % (value / 1023.0 * 3.3) )
+
+
+value = adc.read( channel = 2 ) # puedes ajustar el canal en el que lees
+
+print("Read channel 2: %.2f" % (value / 1023.0 * 3.3) )

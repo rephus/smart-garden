@@ -4,6 +4,7 @@ import config
 import requests
 from datetime import datetime 
 import traceback
+from mcp3008 import MCP3008
 
 # GPIO pins
 PLANTAS = "plantas"
@@ -14,8 +15,8 @@ RELAY_PLANTAS = 17
 RELAY_ARBOLES = 27
 
 # Humidity sensor
-SENSOR_PLANTAS = 23
-SENSOR_ARBOLES = 24 
+SENSOR_PLANTAS = 0 # channel in MCP3008
+SENSOR_ARBOLES = 1 
 MIN_SENSOR_VALUE = 10000
 MAX_SENSOR_VALUE = 100000
 
@@ -24,12 +25,14 @@ device_dict = {
     ARBOLES: {
         "relay_pin": RELAY_ARBOLES, 
         "sensor_pin": SENSOR_ARBOLES,
-        "hassio_entity": "sensor.arboles_humidity"
+        "hassio_entity": "sensor.arboles_humidity",
+        "hassio_watering": "sensor.arboles_watering"
     },
     PLANTAS: {
         "relay_pin": RELAY_PLANTAS, 
         "sensor_pin": SENSOR_PLANTAS,
-        "hassio_entity": "sensor.plantas_humidity"
+        "hassio_entity": "sensor.plantas_humidity",
+        "hassio_watering": "sensor.plantas_watering"
     },
 }
 
@@ -48,8 +51,8 @@ schedule = [
     ["all", "11:05", DRY], #water each devide for 5 minutes if sensor is below threshold
     ["all", "14:00", DRY],
 
-    [PLANTAS, "18:00", ON], 
-    [PLANTAS, "18:29", OFF], 
+    [PLANTAS, "16:05", ON], 
+    [PLANTAS, "16:29", OFF], 
 
     [ARBOLES, "18:30", ON],
     [ARBOLES, "18:59", OFF],
@@ -77,7 +80,28 @@ time.sleep(1)
 GPIO.output(RELAY_PLANTAS, GPIO.HIGH) 
 GPIO.output(RELAY_ARBOLES, GPIO.HIGH) 
 
-def update_hassio_entity(entity, status): 
+adc = MCP3008()
+
+def update_hassio_device(entity, status): 
+    try: 
+        log(f"Updating hassio entity {entity} with {status}")
+
+        r = requests.post(f"http://{config.HASSIO_URL}/api/states/{entity}", 
+            timeout=10,
+                headers={
+                'Authorization': f"Bearer {config.HASSIO_TOKEN}",
+                'Content-Type':'application/json'
+            }, 
+            json={"state": status, 
+                "attributes":   {
+                "device_class": "switch"
+            } 
+        })
+        log(f"Hassio response: {r.text}")
+    except Exception as e: 
+        log(f"Unable to update hassio entity: {e}")
+
+def update_hassio_humidity(entity, status): 
     try: 
         log(f"Updating hassio entity {entity} with {status}")
 
@@ -129,37 +153,21 @@ def is_raining_today():
         return False 
 
 
-def rc_time (pin_to_circuit):
-    count = 0                                       #Output on the pin for 
-    GPIO.setup(pin_to_circuit, GPIO.OUT)
-    GPIO.output(pin_to_circuit, GPIO.LOW)
-    time.sleep(0.01)                                 #Change the pin back to input
-    GPIO.setup(pin_to_circuit, GPIO.IN)             #Count until the pin goes high
-    while (GPIO.input(pin_to_circuit) == GPIO.LOW) and count < MAX_SENSOR_VALUE:
-        count += 1
-    return count                                   #Catch when script is interupted, cleanup correctly
-
-def avg(lst):
-    return sum(lst) / len(lst)
-
+#deprecated 
 def calculate_percent(sensor_value): 
     percent = (sensor_value - MIN_SENSOR_VALUE ) / (MAX_SENSOR_VALUE- MIN_SENSOR_VALUE)
     percent = round(percent,2)
     percent = max(percent * 100 , 0)
     return percent 
 
-def read_stable_value(pin, times=5):
-    values = []
-    while len(values) < times:
-        value = rc_time(pin)
-        if value == 0: 
-            continue 
 
-        values.append(value) # Number between 0 (light) and 5000 (dark) 
+def read_sensor(pin): 
 
-    sensor_value = round(avg(values))
-    return calculate_percent(sensor_value)
-
+    value = adc.read( channel = pin )
+    n = value / 1023.0 * 3.3 # I assume the value is something between 0 and 1 , inverted
+    percent_value = 100 - (n * 100)
+    log(f"Humidity sensor value {n}: {percent_value}")
+    return percent_value
 
 def get_time(): 
     return datetime.now().strftime("%H:%M")
@@ -179,9 +187,9 @@ if False:
         try: 
             sensor = device_dict[device]['sensor_pin']
             hassio_entity = device_dict[device]['hassio_entity']
-            humidity_sensor = read_stable_value(sensor)
+            humidity_sensor = read_sensor(sensor)
             log(f"Humidity on sensor {device}: {humidity_sensor}")
-            update_hassio_entity(hassio_entity, humidity_sensor)
+            update_hassio_humidity(hassio_entity, humidity_sensor)
         except Exception as e: 
             log(f"Error when updating humidity sensor on start: {e}")
 
@@ -194,9 +202,9 @@ while True:
             for device in [PLANTAS, ARBOLES]: 
                 sensor = device_dict[device]['sensor_pin']
                 hassio_entity = device_dict[device]['hassio_entity']
-                humidity_sensor = read_stable_value(sensor)
+                humidity_sensor = read_sensor(sensor)
                 log(f"Humidity on sensor {device}: {humidity_sensor}")
-                update_hassio_entity(hassio_entity, humidity_sensor)
+                update_hassio_humidity(hassio_entity, humidity_sensor)
 
     
         #log(get_time()) 
@@ -215,38 +223,45 @@ while True:
                         relay = device_dict[device]['relay_pin']
                         sensor = device_dict[device]['sensor_pin']
                         hassio_entity = device_dict[device]['hassio_entity']
+                        hassio_watering = device_dict[device]['hassio_watering']
 
-                        humidity_sensor = read_stable_value(sensor)
+                        humidity_sensor = read_sensor(sensor)
                         log(f"Humidity on sensor {device}: {humidity_sensor}")
                         if humidity_sensor < HUMIDITY_THRESHOLD: 
                         
                             notify_slack(f"Detected low humidity ({humidity_sensor}%), watering {device}...")
                             log(f"Detected low humidity, watering {device}...")
-                            update_hassio_entity(hassio_entity, humidity_sensor)
+                            update_hassio_humidity(hassio_entity, humidity_sensor)
+                            update_hassio_device(hassio_watering, "on")
 
                             activate(relay, ON)
                             time.sleep(60*5) # 5 minutes 
                             activate(relay, OFF)  
+                            update_hassio_device(hassio_watering, "off")
+
                             log(f"Finished watering {device}")
 
-                            humidity_sensor = read_stable_value(sensor)
+                            humidity_sensor = read_sensor(sensor)
                             log(f"Humidity after watering on sensor {sensor}: {humidity_sensor}")
-                            update_hassio_entity(hassio_entity, humidity_sensor)
+                            update_hassio_humidity(hassio_entity, humidity_sensor)
 
                 else:
                     relay = device_dict[device]['relay_pin']
                     sensor = device_dict[device]['sensor_pin']
                     hassio_entity = device_dict[device]['hassio_entity']
+                    hassio_watering = device_dict[device]['hassio_watering']
 
                     # if status is ON, check the weather,
                     # and do not active if it is raining today 
                     if status == ON and is_raining_today(): 
                         log (f"It is raining today, not activating {device}")
                     else:
-                        humidity_sensor = read_stable_value(sensor)
-                        update_hassio_entity(hassio_entity, humidity_sensor)
+                        humidity_sensor = read_sensor(sensor)
+                        update_hassio_humidity(hassio_entity, humidity_sensor)
                         log(f"Humidity on scheduled watering {device} : {humidity_sensor}")
-                            
+
+                        update_hassio_device(hassio_watering, status)
+
                         activate(relay, status)
 
         wait_until_next_second()

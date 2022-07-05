@@ -1,0 +1,35 @@
+<html>
+    <head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<style>
+body {background-color: powderblue;}
+button   {width:100px; height:100px}
+</style>
+<script>
+setInterval(() => {
+    fetch('/sensor/0').then(async r => {
+        j = await r.json()
+        document.getElementById('humedad-plantas').innerHTML = j 
+    });
+    fetch('/sensor/1').then(async r => {
+        j = await r.json()
+        document.getElementById('humedad-arboles').innerHTML = j 
+    })
+}, 5000)
+</script>
+<body>
+    <h1> Huerto PI</h1>
+    <button  onClick="fetch('/trigger/17/on')">Plantas ON</button> 
+        <button  onClick="fetch('/trigger/17/off')">Plantas OFF</button> 
+
+    <label>Humedad:</label>
+    <span id='humedad-plantas'>-</span>%
+    <br/>
+    <button  onClick="fetch('/trigger/27/on')">Arboles ON</button>
+    <button  onClick="fetch('/trigger/27/off')">Arboles OFF</button>
+
+     <label>Humedad:</label>
+     <span id='humedad-arboles'>-</span>%
+</body>
+</html>
